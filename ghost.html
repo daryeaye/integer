@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Project 2: Spooky Reflection 3</title>
+  <link href="https://fonts.googleapis.com/css2?family=Kelly+Slab&display=swap" rel="stylesheet">
+  <style>
+    :root { --square: min(82vmin, 820px); }
+    body {
+      margin: 0; padding: 24px 16px 64px;
+      font-family: "Kelly Slab", system-ui, sans-serif;
+      background: #bbff8dff;
+    }
+    .topbar {
+      display: flex; justify-content: flex-end; align-items: center;
+      max-width: 1600px; margin: 0 auto 10px; gap: 10px;
+    }
+    .btn {
+      font-family: "Kelly Slab", system-ui, sans-serif; /* ensure button font */
+      font-size: 18px; padding: 8px 14px;
+      border: 2px solid #111; background: #fff; cursor: pointer;
+      border-radius: 10px; transition: transform .05s, background .2s; user-select: none;
+    }
+    .btn:hover { background: #f0f0f0; }
+    .btn:active { transform: translateY(1px); }
+    .btn.active { background: #111; color: #fff; }
+    .btn.hidden { display: none; }
+
+    .boards {
+      max-width: 1600px; margin: 0 auto;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start;
+    }
+    .canvas-card {
+      display: grid; place-items: center;
+      background: rgba(255,255,255,0.65); border-radius: 12px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.15); padding: 10px;
+    }
+    .canvas-wrap {
+      width: var(--square); height: var(--square);
+      display: grid; place-items: center; background: #ddd;
+      border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
+    }
+    #leftCanvas, #board {
+      width: 100%; height: 100%; display: block; border-radius: 6px;
+    }
+    footer { margin-top: 16px; text-align: center; font-size: 16px; color: #222; }
+    @media (max-width: 1100px) { .boards { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <button id="plotBtn"  class="btn active" type="button">Plot Points</button>
+    <button id="lineBtn"  class="btn"          type="button">Draw Lines</button>
+    <button id="stopBtn"  class="btn hidden"   type="button">Stop</button>
+    <button id="deleteBtn"class="btn"          type="button">Delete</button>
+  </div>
+
+  <div class="boards">
+    <div class="canvas-card">
+      <div class="canvas-wrap">
+        <canvas id="leftCanvas" width="1000" height="1000"></canvas>
+      </div>
+    </div>
+    <div class="canvas-card">
+      <div class="canvas-wrap">
+        <canvas id="board" width="1000" height="1000"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <footer>@Xinlin Dwyane Ye. All rights reserved.</footer>
+
+  <script>
+  (function () {
+    /* ====== CONFIG (updated images) ====== */
+    const LEFT_IMAGE_URL  = 'https://daryeaye.github.io/integer/InC3.jpg';
+    const RIGHT_IMAGE_URL = 'https://daryeaye.github.io/integer/InD3.jpg';
+
+    const POINT_RADIUS = 4;
+    const HIT_TOL_POINT = 10;
+    const HIT_TOL_LINE = 8;
+
+    const leftCanvas = document.getElementById('leftCanvas');
+    const leftCtx    = leftCanvas.getContext('2d');
+    const board      = document.getElementById('board');
+    const ctx        = board.getContext('2d');
+
+    const plotBtn    = document.getElementById('plotBtn');
+    const lineBtn    = document.getElementById('lineBtn');
+    const stopBtn    = document.getElementById('stopBtn');
+    const deleteBtn  = document.getElementById('deleteBtn');
+
+    let mode = 'plot';                // 'plot' | 'line' | 'delete'
+    let paused = false;               // NEW: Stop button pauses all drawing
+    let lineChainActive = false;      // chaining segments in line mode
+    let lastPointId = null;
+    let nextPointId = 1;
+
+    // Store points relative to the right image rect (u,v in [0,1])
+    const points = []; // {id,u,v}
+    const lines  = []; // {p1,p2}
+
+    let leftImg = null, rightImg = null;
+    let rightRect = { x:0, y:0, w:0, h:0 }; // current fit rect for right image
+
+    function resizeToCSS(canvas) {
+      const w = Math.floor(canvas.clientWidth);
+      const h = Math.floor(canvas.clientHeight);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w; canvas.height = h;
+      }
+    }
+
+    function drawImageFitted(ctx, img, cw, ch) {
+      const ir = img.width / img.height;
+      const cr = cw / ch;
+      let dw, dh, dx, dy;
+      if (cr > ir) { dh = ch; dw = dh * ir; dx = (cw - dw) / 2; dy = 0; }
+      else { dw = cw; dh = dw / ir; dx = 0; dy = (ch - dh) / 2; }
+      ctx.drawImage(img, dx, dy, dw, dh);
+      return { x: dx, y: dy, w: dw, h: dh };
+    }
+
+    function imgToCanvas(u, v) {
+      return { x: rightRect.x + u * rightRect.w, y: rightRect.y + v * rightRect.h };
+    }
+    function canvasToImg(x, y) {
+      const u = (x - rightRect.x) / rightRect.w;
+      const v = (y - rightRect.y) / rightRect.h;
+      if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+      return { u, v };
+    }
+    function getCanvasPos(evt) {
+      const r = board.getBoundingClientRect();
+      return {
+        x: (evt.clientX - r.left) * (board.width / r.width),
+        y: (evt.clientY - r.top)  * (board.height / r.height)
+      };
+    }
+    function dist2(x1,y1,x2,y2){ const dx=x1-x2, dy=y1-y2; return dx*dx+dy*dy; }
+    function getPointById(id){ return points.find(p => p.id === id) || null; }
+
+    function nearestPointId(x,y,tol=HIT_TOL_POINT){
+      let best=null, bestD2=tol*tol;
+      for(const p of points){
+        const pc = imgToCanvas(p.u, p.v);
+        const d2 = dist2(x,y,pc.x,pc.y);
+        if(d2<=bestD2){ bestD2=d2; best=p.id; }
+      }
+      return best;
+    }
+    function pointToSegmentDistance(x,y,ax,ay,bx,by){
+      const ABx=bx-ax, ABy=by-ay, APx=x-ax, APy=y-ay;
+      const ab2=ABx*ABx + ABy*ABy;
+      if(!ab2) return Math.sqrt(dist2(x,y,ax,ay));
+      let t = (APx*ABx + APy*ABy)/ab2; t=Math.max(0,Math.min(1,t));
+      const cx=ax+t*ABx, cy=ay+t*ABy;
+      return Math.sqrt(dist2(x,y,cx,cy));
+    }
+    function nearestLineIndex(x,y,tol=HIT_TOL_LINE){
+      for(let i=lines.length-1;i>=0;i--){
+        const L=lines[i], a=getPointById(L.p1), b=getPointById(L.p2);
+        if(!a||!b) continue;
+        const A = imgToCanvas(a.u, a.v), B = imgToCanvas(b.u, b.v);
+        const d = pointToSegmentDistance(x,y,A.x,A.y,B.x,B.y);
+        if(d<=tol) return i;
+      }
+      return -1;
+    }
+    function deletePointById(id){
+      const idx=points.findIndex(p=>p.id===id);
+      if(idx>=0) points.splice(idx,1);
+      for(let i=lines.length-1;i>=0;i--){
+        if(lines[i].p1===id || lines[i].p2===id) lines.splice(i,1);
+      }
+    }
+
+    function drawLeft(){
+      resizeToCSS(leftCanvas);
+      leftCtx.clearRect(0,0,leftCanvas.width,leftCanvas.height);
+      if(leftImg && leftImg.complete && leftImg.naturalWidth){
+        drawImageFitted(leftCtx, leftImg, leftCanvas.width, leftCanvas.height);
+      }
+    }
+    function redraw(){
+      resizeToCSS(board);
+      ctx.clearRect(0,0,board.width,board.height);
+
+      if(rightImg && rightImg.complete && rightImg.naturalWidth){
+        rightRect = drawImageFitted(ctx, rightImg, board.width, board.height);
+      } else {
+        rightRect = { x:0, y:0, w:board.width, h:board.height };
+      }
+
+      // lines
+      ctx.lineWidth=2; ctx.strokeStyle='#000';
+      for(const L of lines){
+        const a=getPointById(L.p1), b=getPointById(L.p2);
+        if(!a||!b) continue;
+        const A=imgToCanvas(a.u,a.v), B=imgToCanvas(b.u,b.v);
+        ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke();
+      }
+      // points
+      ctx.fillStyle='red';
+      for(const p of points){
+        const C=imgToCanvas(p.u,p.v);
+        ctx.beginPath(); ctx.arc(C.x,C.y,POINT_RADIUS,0,Math.PI*2); ctx.fill();
+      }
+      // chain highlight
+      if(mode==='line' && lineChainActive && lastPointId!=null){
+        const sp=getPointById(lastPointId);
+        if(sp){
+          const S=imgToCanvas(sp.u,sp.v);
+          ctx.strokeStyle='#000'; ctx.lineWidth=2;
+          ctx.beginPath(); ctx.arc(S.x,S.y,POINT_RADIUS+4,0,Math.PI*2); ctx.stroke();
+        }
+      }
+    }
+
+    function showStopButton(show) {
+      stopBtn.classList.toggle('hidden', !show);
+    }
+
+    function setMode(newMode){
+      mode = newMode;
+      paused = false;                 // unpause whenever switching mode
+      lineChainActive = (mode === 'line') ? lineChainActive : false;
+      if (mode !== 'line') lastPointId = null;
+
+      plotBtn.classList.toggle('active', mode==='plot');
+      lineBtn.classList.toggle('active', mode==='line');
+      deleteBtn.classList.toggle('active', mode==='delete');
+      showStopButton(mode === 'line'); // only visible in Draw Lines mode
+
+      redraw();
+    }
+
+    // Mode buttons
+    plotBtn.addEventListener('click', ()=> setMode('plot'));
+    lineBtn.addEventListener('click', ()=> setMode('line'));
+    deleteBtn.addEventListener('click',()=> setMode('delete'));
+
+    // Stop button: pause input until another mode is clicked
+    stopBtn.addEventListener('click', ()=>{
+      paused = true;
+      lineChainActive = false;
+      lastPointId = null;
+      // keep Stop visible (still in line mode), but ignore clicks until another mode is chosen
+      redraw();
+    });
+
+    // Canvas interactions
+    board.addEventListener('click',(evt)=>{
+      if (paused) return;  // paused by Stop button
+
+      const {x,y} = getCanvasPos(evt);
+      if (mode === 'plot'){
+        const uv = canvasToImg(x,y);
+        if(!uv) return; // must be inside image rect
+        points.push({id:nextPointId++, u:uv.u, v:uv.v});
+        return redraw();
+      }
+      if (mode === 'line'){
+        const hitId = nearestPointId(x,y);
+        if (hitId == null) return;
+        if (!lineChainActive){
+          lineChainActive = true;
+          lastPointId = hitId;
+          return redraw();
+        } else if (hitId !== lastPointId){
+          lines.push({p1:lastPointId, p2:hitId});
+          lastPointId = hitId; // continue chain
+          return redraw();
+        }
+      }
+      if (mode === 'delete'){
+        const pid = nearestPointId(x,y);
+        if (pid != null){ deletePointById(pid); return redraw(); }
+        const li = nearestLineIndex(x,y);
+        if (li >= 0){ lines.splice(li,1); return redraw(); }
+      }
+    });
+
+    // Esc ends current chain (does not unpause)
+    window.addEventListener('keydown',(e)=>{
+      if (mode==='line' && e.key==='Escape'){
+        lineChainActive = false; lastPointId = null; redraw();
+      }
+    });
+
+    // Image loading & init
+    function loadImage(url, cb){
+      const img = new Image(); img.crossOrigin = 'anonymous';
+      img.onload = ()=> cb(img);
+      img.src = url;
+    }
+    function drawLeft(){
+      resizeToCSS(leftCanvas);
+      leftCtx.clearRect(0,0,leftCanvas.width,leftCanvas.height);
+      if (leftImg && leftImg.complete && leftImg.naturalWidth) {
+        drawImageFitted(leftCtx, leftImg, leftCanvas.width, leftCanvas.height);
+      }
+    }
+    function init(){
+      loadImage(LEFT_IMAGE_URL,  (img)=>{ leftImg = img; drawLeft(); });
+      loadImage(RIGHT_IMAGE_URL, (img)=>{ rightImg = img; redraw();   });
+      window.addEventListener('resize', ()=>{ drawLeft(); redraw(); });
+      setMode('plot');
+    }
+    init();
+  })();
+  </script>
+</body>
+</html>
