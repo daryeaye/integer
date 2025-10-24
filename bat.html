@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Project 2: Spooky Reflection 2</title>
+  <title>Project 2: Spooky Reflection 2+</title>
   <link href="https://fonts.googleapis.com/css2?family=Kelly+Slab&display=swap" rel="stylesheet">
   <style>
     :root { --square: min(82vmin, 820px); }
@@ -16,7 +16,7 @@
       max-width: 1600px; margin: 0 auto 10px; gap: 10px;
     }
     .btn {
-      font-family: "Kelly Slab", system-ui, sans-serif; /* ensure button font */
+      font-family: "Kelly Slab", system-ui, sans-serif;
       font-size: 18px; padding: 8px 14px;
       border: 2px solid #111; background: #fff; cursor: pointer;
       border-radius: 10px; transition: transform .05s, background .2s; user-select: none;
@@ -68,11 +68,11 @@
     </div>
   </div>
 
-  <footer>@Xinlin Dwyane Ye. All rights reserved.</footer>
+  <footer>©True PBL. All rights reserved.</footer>
 
   <script>
   (function () {
-    /* ====== CONFIG (updated images) ====== */
+    /* ====== CONFIG ====== */
     const LEFT_IMAGE_URL  = 'https://daryeaye.github.io/integer/InC2.jpg';
     const RIGHT_IMAGE_URL = 'https://daryeaye.github.io/integer/InD2.jpg';
 
@@ -91,7 +91,7 @@
     const deleteBtn  = document.getElementById('deleteBtn');
 
     let mode = 'plot';                // 'plot' | 'line' | 'delete'
-    let paused = false;               // NEW: Stop button pauses all drawing
+    let paused = false;               // Stop button pauses all drawing
     let lineChainActive = false;      // chaining segments in line mode
     let lastPointId = null;
     let nextPointId = 1;
@@ -103,6 +103,43 @@
     let leftImg = null, rightImg = null;
     let rightRect = { x:0, y:0, w:0, h:0 }; // current fit rect for right image
 
+    // ====== MEMORY (localStorage) ======
+    // Key is tied to the right image so different boards don't clash.
+    const STORAGE_KEY = 'spooky-reflection-2::' + RIGHT_IMAGE_URL;
+
+    function saveState() {
+      try {
+        const payload = {
+          v: 1,
+          points,
+          lines,
+          nextPointId
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      } catch (e) {
+        console.warn('saveState failed:', e);
+      }
+    }
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (!data || data.v !== 1) return;
+
+        // restore
+        points.splice(0, points.length, ...(data.points || []));
+        lines.splice(0, lines.length, ...(data.lines  || []));
+        nextPointId = Number.isInteger(data.nextPointId)
+          ? data.nextPointId
+          : (points.reduce((m, p) => Math.max(m, p.id || 0), 0) + 1);
+      } catch (e) {
+        console.warn('loadState failed:', e);
+      }
+    }
+
+    // ====== Helpers ======
     function resizeToCSS(canvas) {
       const w = Math.floor(canvas.clientWidth);
       const h = Math.floor(canvas.clientHeight);
@@ -175,6 +212,7 @@
       }
     }
 
+    // ====== Drawing ======
     function drawLeft(){
       resizeToCSS(leftCanvas);
       leftCtx.clearRect(0,0,leftCanvas.width,leftCanvas.height);
@@ -235,7 +273,7 @@
       redraw();
     }
 
-    // Mode buttons
+    // ====== Mode buttons ======
     plotBtn.addEventListener('click', ()=> setMode('plot'));
     lineBtn.addEventListener('click', ()=> setMode('line'));
     deleteBtn.addEventListener('click',()=> setMode('delete'));
@@ -245,11 +283,10 @@
       paused = true;
       lineChainActive = false;
       lastPointId = null;
-      // keep Stop visible (still in line mode), but ignore clicks until another mode is chosen
       redraw();
     });
 
-    // Canvas interactions
+    // ====== Canvas interactions ======
     board.addEventListener('click',(evt)=>{
       if (paused) return;  // paused by Stop button
 
@@ -258,6 +295,7 @@
         const uv = canvasToImg(x,y);
         if(!uv) return; // must be inside image rect
         points.push({id:nextPointId++, u:uv.u, v:uv.v});
+        saveState();
         return redraw();
       }
       if (mode === 'line'){
@@ -269,15 +307,24 @@
           return redraw();
         } else if (hitId !== lastPointId){
           lines.push({p1:lastPointId, p2:hitId});
+          saveState();
           lastPointId = hitId; // continue chain
           return redraw();
         }
       }
       if (mode === 'delete'){
         const pid = nearestPointId(x,y);
-        if (pid != null){ deletePointById(pid); return redraw(); }
+        if (pid != null){
+          deletePointById(pid);
+          saveState();
+          return redraw();
+        }
         const li = nearestLineIndex(x,y);
-        if (li >= 0){ lines.splice(li,1); return redraw(); }
+        if (li >= 0){
+          lines.splice(li,1);
+          saveState();
+          return redraw();
+        }
       }
     });
 
@@ -288,25 +335,27 @@
       }
     });
 
-    // Image loading & init
+    // ====== Image loading & init ======
     function loadImage(url, cb){
       const img = new Image(); img.crossOrigin = 'anonymous';
       img.onload = ()=> cb(img);
       img.src = url;
     }
-    function drawLeft(){
-      resizeToCSS(leftCanvas);
-      leftCtx.clearRect(0,0,leftCanvas.width,leftCanvas.height);
-      if (leftImg && leftImg.complete && leftImg.naturalWidth) {
-        drawImageFitted(leftCtx, leftImg, leftCanvas.width, leftCanvas.height);
-      }
-    }
+
     function init(){
+      // Preload images
       loadImage(LEFT_IMAGE_URL,  (img)=>{ leftImg = img; drawLeft(); });
       loadImage(RIGHT_IMAGE_URL, (img)=>{ rightImg = img; redraw();   });
+
+      // Restore any saved work for this board
+      loadState();
+
       window.addEventListener('resize', ()=>{ drawLeft(); redraw(); });
+
       setMode('plot');
+      redraw(); // ensure restored shapes are visible immediately
     }
+
     init();
   })();
   </script>
